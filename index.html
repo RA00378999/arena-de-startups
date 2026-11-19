@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arena de Startups — Jogo de Empresas de Empreendedorismo e Inovação</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = { theme: { extend: {
+    fontFamily: { display: ['"Space Grotesk"', 'Verdana', 'sans-serif'] },
+    colors: { fundo: '#f3f4fa', tinta: '#27245e', faixa: '#e2e4f0', sinal: '#f5a524' }
+  } } };
+</script>
+<style>
+  body { background: #f3f4fa; }
+  input[type=range] { accent-color: #27245e; width: 100%; }
+  .card { background: #ffffff; border: 1px solid #d9dcea; border-radius: 1rem; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  @media print { .no-print { display: none !important; } body { background: #fff; } }
+</style>
+</head>
+<body class="min-h-screen text-slate-800 antialiased">
+
+<header class="bg-tinta text-white no-print">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+    <div class="flex-1 min-w-[12rem]">
+      <div class="font-display font-bold text-xl leading-tight">Arena de Startups</div>
+      <div class="text-xs text-indigo-100/80">Jogo de Empresas · Empreendedorismo e Inovação · Administração</div>
+    </div>
+    <span id="chip-rodada" class="hidden text-sm font-semibold bg-sinal text-tinta rounded-full px-3 py-1"></span>
+    <button onclick="toggleRegras(true)" class="text-sm underline underline-offset-4 hover:text-white">Regras</button>
+    <button onclick="reiniciar()" class="text-sm underline underline-offset-4 hover:text-white">Reiniciar</button>
+  </div>
+</header>
+
+<main id="app" class="max-w-5xl mx-auto px-4 py-6"></main>
+
+<footer class="max-w-5xl mx-auto px-4 pb-8 text-xs text-slate-500">
+  Jogo de empresas para fins exclusivamente didáticos. O mercado, as empresas e os cenários são fictícios e foram simplificados para uso em sala de aula.
+</footer>
+
+<div id="regras" class="hidden fixed inset-0 z-50 bg-black/50 p-4 overflow-y-auto no-print" onclick="if(event.target===this)toggleRegras(false)">
+  <div class="card max-w-2xl mx-auto p-6 my-6">
+    <div class="flex items-start justify-between gap-4">
+      <h2 class="font-display font-bold text-2xl text-tinta">Regras do jogo</h2>
+      <button onclick="toggleRegras(false)" class="text-slate-500 hover:text-slate-900 text-2xl leading-none" aria-label="Fechar">×</button>
+    </div>
+    <div id="regras-corpo" class="mt-4 space-y-3 text-sm leading-relaxed"></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   ARENA DE STARTUPS — Jogo de Empresas de Empreendedorismo e Inovação
+   Arquivo único: HTML + Tailwind (CDN) + JavaScript. Sem backend.
+   De 4 a 6 empresas idênticas. Valores monetários em R$ mil.
+   ===================================================================== */
+
+/* ---------- 1. PARÂMETROS ---------- */
+const PADRAO = { modo: 'simultaneo', n: 4, demanda: 500, fixo: 15, bonus: 5, capital: 100, pivo: 10 };
+const RODADAS = 10;
+const PESOS = { preco: 0.5, marca: 0.3, inov: 0.2 };          // como o cliente escolhe
+const NOTA_PRECO = { baixo: 100, medio: 65, alto: 25 };       // atratividade de preço (0–100)
+const EXPOENTE = 2.5;                                          // sensibilidade do share à atratividade
+const JUROS = 0.08;                                            // juros por rodada sobre caixa negativo
+const INTANG = 1;                                              // R$ mil por ponto de índice (Marca e Inovação)
+const MAX_MKT = 10, MAX_PD = 15, MARGEM_TETO = 18;
+const LETRAS = 'ABCDEF';
+const CORES = ['#b91c1c', '#1d4ed8', '#15803d', '#b45309', '#7e22ce', '#0e7490'];
+
+/* Eventos de cenário (PESTEL). kind: 'opp' (oportunidade) ou 'threat' (ameaça).
+   gross = variação do lucro bruto; demand = variação da demanda;
+   fixed = variação do custo fixo (R$ mil); innov = bônus no rendimento da inovação. */
+const EVENTOS = [
+  { id: 'nuvem', nome: 'Queda no Custo de Tecnologia', pestel: 'Tecnológico', kind: 'opp', icone: '☁️', gross: 0.15,
+    desc: 'Serviços de nuvem e ferramentas digitais ficam mais baratos e reduzem o custo de entregar o produto.',
+    efeito: 'Lucro bruto +15% para todas as empresas.' },
+  { id: 'cambio', nome: 'Alta do Dólar', pestel: 'Econômico', kind: 'threat', icone: '💵', gross: -0.25,
+    desc: 'Insumos importados e licenças de software ficam mais caros, e o repasse ao cliente é só parcial.',
+    efeito: 'Lucro bruto −25% para todas as empresas.' },
+  { id: 'dados', nome: 'Novas Exigências de Proteção de Dados', pestel: 'Legal', kind: 'threat', icone: '⚖️', fixed: 3,
+    desc: 'A fiscalização sobre o tratamento de dados pessoais aumenta e exige adequação imediata de processos e sistemas.',
+    efeito: 'Custo fixo obrigatório adicional de R$ 3 mil nesta rodada.' },
+  { id: 'digital', nome: 'Onda de Digitalização do Consumo', pestel: 'Sociocultural', kind: 'opp', icone: '📱', demand: 0.20,
+    desc: 'Mais consumidores passam a comprar e contratar por canais digitais, ampliando o mercado.',
+    efeito: 'Demanda total do mercado +20%.' },
+  { id: 'gigante', nome: 'Entrada de um Grande Concorrente', pestel: 'Econômico', kind: 'threat', icone: '🏢', demand: -0.10,
+    desc: 'Uma grande empresa lança uma oferta parecida e captura parte dos clientes do mercado.',
+    efeito: 'Demanda total do mercado −10%.' },
+  { id: 'fomento', nome: 'Edital de Fomento à Inovação', pestel: 'Político', kind: 'opp', icone: '🚀', innov: 0.30,
+    desc: 'Um programa público de subvenção apoia projetos de pesquisa e desenvolvimento em pequenas empresas.',
+    efeito: 'Todo investimento em inovação rende +30% em Índice de Inovação nesta rodada.' },
+  { id: 'talentos', nome: 'Escassez de Talentos em Tecnologia', pestel: 'Sociocultural', kind: 'threat', icone: '🧑‍💻', fixed: 4,
+    desc: 'A disputa por profissionais qualificados eleva salários e o custo de reter a equipe.',
+    efeito: 'Custo fixo adicional de R$ 4 mil nesta rodada.' },
+  { id: 'simples', nome: 'Simplificação Regulatória para Startups', pestel: 'Legal', kind: 'opp', icone: '📄', fixed: -3,
+    desc: 'Regras mais simples de abertura, tributação e contratação reduzem a burocracia das empresas nascentes.',
+    efeito: 'Custo fixo reduzido em R$ 3 mil nesta rodada.' }
+];
+
+const PORTER = {
+  custo: { nome: 'Baixo Custo', desc: 'Solução acessível, feita para ganhar escala. Margem estável de 10% e custo fixo R$ 3 mil menor.' },
+  dif:   { nome: 'Premium', desc: 'Solução diferenciada, de alto valor percebido. Margem de 9% a 18%, conforme preço, marca e inovação.' },
+  foco:  { nome: 'Nicho', desc: 'Atende um segmento específico e fiel. Margem de 9% a 17%, conforme o preço. Investimentos rendem +30%, mas o mercado alcançável é 5% menor.' }
+};
+const PRECO = { baixo: 'Baixo', medio: 'Médio', alto: 'Alto' };
+const TOWS = {
+  SO: { nome: 'Arrojada: explorar oportunidades', curto: 'Arrojada', desc: 'Amplia em 50% o ganho de cenários favoráveis e dá +15% de eficácia ao marketing. Não protege contra ameaças.' },
+  WT: { nome: 'Cautelosa: proteger o negócio', curto: 'Cautelosa', desc: 'Reduz à metade o impacto de cenários negativos. Não amplia oportunidades.' }
+};
+const SMART = {
+  share:  { nome: 'Aumentar a participação de mercado em 5%', desc: 'Participação da rodada ≥ 105% da participação anterior da empresa.' },
+  fixo:   { nome: 'Reduzir custos fixos em 10%', desc: 'Cortar na rodada ao menos 10% do custo fixo padrão com inovação incremental, já descontado o efeito do cenário.' },
+  margem: { nome: 'Margem líquida de 7%', desc: 'Resultado da rodada (antes do bônus) ≥ 7% da receita.' },
+  inov:   { nome: 'Elevar o Índice de Inovação em 8 pontos', desc: 'Índice de Inovação ≥ anterior + 8 pontos.' }
+};
+
+/* ---------- 2. ESTADO ---------- */
+const CHAVE = 'arena_de_startups_v1';
+let S = null;
+
+/* Códigos de decisão (modo simultâneo): 45 bits em 9 caracteres.
+   34 bits de decisão embaralhados por um sal aleatório + 7 bits de verificação. */
+const ALFA = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const L_PORTER = ['custo', 'dif', 'foco'], L_PRECO = ['baixo', 'medio', 'alto'], L_SMART = ['share', 'fixo', 'margem', 'inov'];
+function chaveSal(sal) {
+  let x = BigInt(sal * 7919 + 104729), k = 0n;
+  for (let i = 0; i < 4; i++) { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); k = (k << 11n) | ((x >> 40n) & 0x7FFn); }
+  return k & ((1n << 34n) - 1n);
+}
+function verificador(p, sal) { return (p * 31n + BigInt(sal) * 17n + 91n) % 127n; }
+function codificar(emp, rodada, d) {
+  let p = 0n; const por = (v, b) => { p = (p << BigInt(b)) | BigInt(Math.round(v)); };
+  por(emp, 3); por(rodada, 4); por(d.tows === 'SO' ? 1 : 0, 1); por(L_PORTER.indexOf(d.porter), 2); por(L_PRECO.indexOf(d.preco), 2); por(L_SMART.indexOf(d.smart), 2);
+  por(d.mkt * 2, 5); por(d.vacas * 2, 5); por(d.estrelas * 2, 5); por(d.interr * 2, 5);
+  const sal = Math.floor(Math.random() * 16);
+  let v = (verificador(p, sal) << 38n) | ((p ^ chaveSal(sal)) << 4n) | BigInt(sal), t = '';
+  for (let i = 0; i < 9; i++) { t = ALFA[Number(v & 31n)] + t; v >>= 5n; }
+  return t.slice(0, 3) + '-' + t.slice(3, 6) + '-' + t.slice(6);
+}
+function decodificar(texto) {
+  const t = String(texto).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (t.length !== 9) return { erro: 'O código tem 9 caracteres (formato XXX-XXX-XXX).' };
+  let v = 0n;
+  for (const c of t) { const k = ALFA.indexOf(c); if (k < 0) return { erro: 'Código inválido: o caractere "' + c + '" não é usado (não há 0, 1, I nem O).' }; v = (v << 5n) | BigInt(k); }
+  const sal = Number(v & 15n), p = ((v >> 4n) & ((1n << 34n) - 1n)) ^ chaveSal(sal);
+  if ((v >> 38n) !== verificador(p, sal)) return { erro: 'Código inválido. Confira a digitação com a equipe.' };
+  let r = p; const tirar = b => { const x = Number(r & ((1n << BigInt(b)) - 1n)); r >>= BigInt(b); return x; };
+  const interr = tirar(5) / 2, estrelas = tirar(5) / 2, vacas = tirar(5) / 2, mkt = tirar(5) / 2;
+  const smart = tirar(2), preco = tirar(2), porter = tirar(2), tows = tirar(1), rodada = tirar(4), emp = tirar(3);
+  if (emp > 5 || porter > 2 || preco > 2 || mkt > MAX_MKT || vacas + estrelas + interr > MAX_PD || rodada < 1 || rodada > RODADAS) return { erro: 'Código inválido. Confira a digitação com a equipe.' };
+  return { emp: emp, rodada: rodada, d: { tows: tows ? 'SO' : 'WT', porter: L_PORTER[porter], preco: L_PRECO[preco], smart: L_SMART[smart], mkt: mkt, vacas: vacas, estrelas: estrelas, interr: interr } };
+}
+
+/* Estado do dispositivo de equipe (modo simultâneo) */
+const CHAVE_EQ = 'arena_de_startups_equipe_v1';
+let T = null, msgColeta = null;
+function novoT() { return { tela: 'escolha', emp: null, rodada: 1, ult: {}, codigo: null }; }
+function salvarT() { try { localStorage.setItem(CHAVE_EQ, JSON.stringify(T)); } catch (e) {} }
+function carregarT() { try { const t = localStorage.getItem(CHAVE_EQ); return t ? JSON.parse(t) : null; } catch (e) { return null; } }
+function modoEquipe() { return location.hash === '#equipe'; }
+function linkEquipe() { return location.href.split('#')[0] + '#equipe'; }
+
+function novaEmpresa(i, cfg, nome) { return { id: LETRAS[i], nome: nome || '', B: 4, I: 5, perm: 0, caixa: cfg.capital, share: 1 / cfg.n, marca: idx(4, 5), inov: idx(5, 7) }; }
+function novoEstado(cfg, nomes) {
+  const c = Object.assign({}, PADRAO, cfg);
+  const baralho = embaralhar(EVENTOS.map((_, i) => i));
+  while (baralho.length < RODADAS) {
+    const i = Math.floor(Math.random() * EVENTOS.length);
+    if (i !== baralho[baralho.length - 1]) baralho.push(i);
+  }
+  return { tela: 'setup', cfg: c, rodada: 1, turno: 0, eventos: baralho.slice(0, RODADAS),
+    empresas: Array.from({ length: c.n }, (_, i) => novaEmpresa(i, c, nomes && nomes[i])),
+    decisoes: Array(c.n).fill(null), historico: [] };
+}
+function embaralhar(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function idx(estoque, k) { return 100 * (1 - Math.exp(-estoque / k)); }   // retornos decrescentes
+function valorEmp(e) { return e.caixa + INTANG * (e.marca + e.inov); }    // caixa + ativos intangíveis
+function salvar() { try { localStorage.setItem(CHAVE, JSON.stringify(S)); } catch (e) {} }
+function carregar() { try { const t = localStorage.getItem(CHAVE); return t ? JSON.parse(t) : null; } catch (e) { return null; } }
+
+/* ---------- 3. MOTOR FINANCEIRO ---------- */
+function escala(valor, kind, tows) {
+  if (!valor) return 0;
+  if (kind === 'opp') return valor * (tows === 'SO' ? 1.5 : 1);
+  return valor * (tows === 'WT' ? 0.5 : 1);
+}
+
+function apurarRodada() {
+  const cfg = S.cfg, ev = EVENTOS[S.eventos[S.rodada - 1]];
+  const ant = S.historico.length ? S.historico[S.historico.length - 1].linhas : null;
+  const linhas = S.empresas.map((emp, i) => {
+    const d = S.decisoes[i], foco = d.porter === 'foco';
+    const L = { id: emp.id, d: d, shareAnt: emp.share, inovAnt: emp.inov, marcaAnt: emp.marca, caixaAnt: emp.caixa };
+    L.pd = d.vacas + d.estrelas + d.interr;
+
+    // Marca (estoque com depreciação de 50% por rodada)
+    const efMkt = (d.tows === 'SO' ? 1.15 : 1) * (foco ? 1.3 : 1);
+    emp.B = 0.5 * emp.B + d.mkt * efMkt;
+    L.marca = emp.marca = idx(emp.B, 5);
+
+    // Inovação: incremental (vacas), de produto (estrelas) e radical (interr)
+    const efPd = (foco ? 1.3 : 1) * (1 + escala(ev.innov, ev.kind, d.tows));
+    L.estrelasOk = d.estrelas > 0 && d.mkt >= 4;
+    L.interrRolou = d.interr >= 1;
+    L.interrSucesso = L.interrRolou && Math.random() < 0.35;
+    const contrib = (d.vacas * 0.5 + d.estrelas * (d.mkt >= 4 ? 1 : 0.5) + d.interr * (L.interrSucesso ? 2.5 : 0.3)) * efPd;
+    emp.I = 0.6 * emp.I + contrib;
+    L.inov = emp.inov = idx(emp.I, 7);
+    if (L.interrSucesso) emp.perm = Math.min(2, emp.perm + 0.1 * d.interr);
+    L.perm = emp.perm;
+
+    // Atratividade (Preço 50% · Marca 30% · Inovação 20%)
+    const q = (L.marca + L.inov) / 200;
+    let np = NOTA_PRECO[d.preco];
+    if (d.porter === 'custo' && d.preco === 'alto') np -= 15;                       // proposta incoerente
+    if (d.porter === 'dif' && d.preco === 'alto') np = np + (100 - np) * 0.2 * q;   // valor percebido suaviza o preço premium
+    if (foco) np = 0.5 * np + 32.5;                                                 // nicho é menos sensível a preço
+    L.ptsPreco = PESOS.preco * np; L.ptsMarca = PESOS.marca * L.marca; L.ptsInov = PESOS.inov * L.inov;
+    L.atr = Math.max(5, (L.ptsPreco + L.ptsMarca + L.ptsInov) * (foco ? 0.95 : 1));
+
+    // Margem
+    let m;
+    if (d.porter === 'custo') m = 10;
+    else if (d.porter === 'dif') m = d.preco === 'baixo' ? 9 : d.preco === 'medio' ? 10 + 2 * q : 13 + 5 * q;
+    else m = d.preco === 'baixo' ? 9 : d.preco === 'medio' ? 14 : 17;
+    L.bonusEstrelas = L.estrelasOk ? Math.min(1.5, 0.12 * d.estrelas) : 0;
+    L.margem = Math.min(MARGEM_TETO, m + L.bonusEstrelas + emp.perm);
+
+    // Custo fixo, pivô e juros
+    L.economiaVacas = Math.min(3, 0.25 * d.vacas);
+    L.fixoEvento = escala(ev.fixed, ev.kind, d.tows);
+    L.fixo = Math.max(0, cfg.fixo - L.economiaVacas - (d.porter === 'custo' ? 3 : 0) + L.fixoEvento);
+    L.pivo = ant && ant[i].d.porter !== d.porter ? cfg.pivo : 0;
+    L.juros = emp.caixa < 0 ? -emp.caixa * JUROS : 0;
+    return L;
+  });
+
+  // Participação de mercado: proporcional à atratividade elevada a 2,5
+  const soma = linhas.reduce((s, L) => s + Math.pow(L.atr, EXPOENTE), 0);
+  const emGuerra = L => L.d.preco === 'baixo' && L.d.porter === 'custo';
+  const guerra = linhas.filter(emGuerra).length >= 2;
+  linhas.forEach(L => { L.receita = cfg.demanda * cfg.n * (Math.pow(L.atr, EXPOENTE) / soma) * (1 + escala(ev.demand, ev.kind, L.d.tows)); });
+  const recTotal = linhas.reduce((s, L) => s + L.receita, 0);
+
+  linhas.forEach((L, i) => {
+    const emp = S.empresas[i], d = L.d;
+    L.share = L.receita / recTotal;
+    L.fatorEvento = 1 + escala(ev.gross, ev.kind, d.tows);
+    L.brutoBase = L.receita * L.margem / 100 * L.fatorEvento;
+    L.guerra = guerra && emGuerra(L);
+    L.bruto = L.brutoBase * (L.guerra ? 0.6 : 1);
+    L.perdaGuerra = L.brutoBase - L.bruto;
+    L.lucroSemBonus = L.bruto - L.fixo - d.mkt - L.pd - L.pivo - L.juros;
+    L.metaOk =
+      d.smart === 'share'  ? L.share >= L.shareAnt * 1.05 :
+      d.smart === 'fixo'   ? L.economiaVacas - L.fixoEvento >= cfg.fixo * 0.1 - 1e-9 :
+      d.smart === 'margem' ? L.lucroSemBonus / L.receita >= 0.07 :
+                             L.inov >= L.inovAnt + 8;
+    L.bonus = L.metaOk ? cfg.bonus : 0;
+    L.lucro = L.lucroSemBonus + L.bonus;
+    emp.caixa += L.lucro; emp.share = L.share;
+    L.caixa = emp.caixa; L.valor = valorEmp(emp);
+    L.feedback = gerarFeedback(L, ev);
+  });
+
+  S.historico.push({ rodada: S.rodada, evento: S.eventos[S.rodada - 1], guerra: guerra, linhas: linhas });
+}
+
+/* ---------- 4. FEEDBACK EDUCACIONAL ---------- */
+function gerarFeedback(L, ev) {
+  const d = L.d, f = [];
+  const posicionamento = {
+    'custo-baixo': 'Proposta coerente: solução de baixo custo com preço baixo é o caminho clássico para ganhar escala rapidamente. A margem fica em 10%, a escala reduz o custo fixo em R$ 3 mil, e o resultado depende de conquistar participação e de não haver rivais na mesma posição.',
+    'custo-medio': 'Baixo custo com preço médio preserva a margem de 10%, mas abre mão do principal argumento da proposta, que é o preço. A empresa deixou volume na mesa sem ganhar margem em troca.',
+    'custo-alto': 'Proposta de valor incoerente: cobrar preço alto por uma solução de baixo custo não entrega ao cliente motivo para pagar mais. A atratividade de preço foi penalizada em 15 pontos.',
+    'dif-baixo': 'Solução premium com preço baixo destrói valor: a empresa investe para ser percebida como superior e não captura o prêmio correspondente. A margem ficou limitada a 9%.',
+    'dif-medio': 'Solução premium com preço médio captura um prêmio moderado. É uma posição segura, mas distante do teto de 18% reservado a quem sustenta preço alto com marca e inovação fortes.',
+    'dif-alto': 'Proposta coerente: preço premium sustentado por valor percebido. Nessa proposta, a margem cresce com os índices de Marca e Inovação, e são eles que também amortecem a rejeição ao preço alto.',
+    'foco-baixo': 'Nicho com preço baixo é pouco consistente: segmentos específicos pagam por especialização, não por preço. A margem ficou em 9%.',
+    'foco-medio': 'Nicho com preço médio: o segmento é menos sensível a preço e os investimentos rendem 30% a mais, ao custo de um mercado alcançável 5% menor.',
+    'foco-alto': 'Proposta coerente: clientes de nicho aceitam preço alto quando a solução é feita para eles. Margem elevada, com volume limitado pelo tamanho do segmento.'
+  }[d.porter + '-' + d.preco];
+  f.push(['Proposta de valor e preço', posicionamento + ' Margem aplicada: ' + pct(L.margem) + '.']);
+
+  f.push(['Atração de clientes', 'A atratividade somou ' + n1(L.atr) + ' pontos: ' + n1(L.ptsPreco) + ' de Preço (peso 50%), ' + n1(L.ptsMarca) + ' de Marca (peso 30%) e ' + n1(L.ptsInov) + ' de Inovação (peso 20%)' + (d.porter === 'foco' ? ', com redutor de 5% pelo alcance do nicho' : '') + '. Isso resultou em ' + pct(L.share * 100) + ' de participação de mercado (antes: ' + pct(L.shareAnt * 100) + '). Como o preço pesa metade da decisão de compra, quem cobra mais precisa compensar com marca e inovação.']);
+
+  let t;
+  if (ev.kind === 'opp') t = d.tows === 'SO'
+    ? 'Leitura correta do ambiente: diante de uma oportunidade ("' + ev.nome + '"), a postura arrojada ampliou o ganho do cenário em 50%.'
+    : 'O cenário "' + ev.nome + '" era uma oportunidade, mas a postura cautelosa não a explorou. Identificar e aproveitar oportunidades é o centro da ação empreendedora; a cautela só tem valor diante de ameaças.';
+  else t = d.tows === 'WT'
+    ? 'Leitura correta do ambiente: diante de uma ameaça ("' + ev.nome + '"), a postura cautelosa cortou o impacto negativo pela metade.'
+    : 'O cenário "' + ev.nome + '" era uma ameaça e a postura arrojada deixou a empresa exposta ao impacto integral. Empreender envolve assumir riscos calculados, e a análise do ambiente deve vir antes das demais decisões.';
+  f.push(['Leitura de cenário', t]);
+
+  const b = [];
+  if (L.pd === 0) b.push('Nenhum investimento em inovação nesta rodada. O Índice de Inovação perde 40% por rodada sem reposição, e isso corrói 20% da atratividade ao longo do tempo.');
+  if (d.vacas > 0) b.push('Inovação incremental (' + rs(d.vacas) + '): melhorias de processo reduziram o custo fixo em ' + rs(L.economiaVacas) + '. É o tipo de inovação de menor risco e retorno mais previsível.');
+  if (d.estrelas > 0) b.push(L.estrelasOk
+    ? 'Inovação de produto (' + rs(d.estrelas) + '): com marketing de pelo menos R$ 4 mil para levar a novidade ao mercado, rendeu +' + n1(L.bonusEstrelas) + ' p.p. de margem.'
+    : 'Inovação de produto (' + rs(d.estrelas) + '): sem marketing mínimo de R$ 4 mil, rendeu metade do potencial e nenhum ganho de margem. Uma novidade só vira inovação quando chega ao mercado.');
+  if (d.interr > 0) b.push(!L.interrRolou
+    ? 'Inovação radical (' + rs(d.interr) + '): aporte abaixo de R$ 1 mil é insuficiente para um experimento.'
+    : L.interrSucesso
+      ? 'Inovação radical (' + rs(d.interr) + '): a aposta deu certo. O salto elevou a inovação e gerou ganho permanente de margem (acumulado: +' + n1(L.perm) + ' p.p.).'
+      : 'Inovação radical (' + rs(d.interr) + '): a aposta não vingou nesta rodada. É a natureza desse tipo de inovação: alto potencial, alta incerteza. Experimentos pequenos e frequentes reduzem o custo de errar.');
+  f.push(['Tipos de inovação', b.join(' ')]);
+
+  if (L.guerra) f.push(['Guerra de preços', 'Mais de uma empresa adotou baixo custo com preço baixo nesta rodada. A disputa pela mesma posição eliminou 40% do lucro bruto (' + rs(L.perdaGuerra) + ' perdidos). Quando rivais oferecem a mesma coisa pelo menor preço, o ganho vai para o cliente.']);
+  if (L.pivo) f.push(['Pivô', 'A empresa mudou de proposta de valor em relação à rodada anterior e arcou com ' + rs(L.pivo) + ' de custo de pivô. Pivotar é legítimo quando os resultados mostram que a hipótese inicial não se sustenta, mas trocar de direção a toda rodada impede o aprendizado e consome caixa.']);
+  if (L.juros > 0 || L.caixa < 0) f.push(['Gestão de caixa', (L.juros > 0 ? 'A empresa começou a rodada com caixa negativo e pagou ' + rs(L.juros) + ' de juros (8% sobre o saldo devedor). ' : '') + (L.caixa < 0 ? 'O caixa fechou negativo em ' + rs(L.caixa) + ': a empresa está operando com capital de terceiros e pagará juros na próxima rodada. ' : '') + 'Para uma empresa nascente, ficar sem caixa é o principal risco de mortalidade.']);
+
+  f.push(['Meta SMART', '"' + SMART[d.smart].nome + '": ' + (L.metaOk ? 'atingida. Bônus de ' + rs(L.bonus) + '.' : 'não atingida. Metas SMART só funcionam quando são alcançáveis com as decisões tomadas na própria rodada.')]);
+
+  const invest = d.mkt + L.pd;
+  let s = 'Resultado: receita de ' + rs(L.receita) + ', lucro bruto de ' + rs(L.bruto) + ', custo fixo de ' + rs(L.fixo) + ' e investimentos de ' + rs(invest) + ', fechando em ' + rs(L.lucro) + ' na rodada. Caixa: ' + rs(L.caixa) + '. Valor da empresa: ' + rs(L.valor) + '.';
+  if (L.lucro < 0 && invest > L.bruto * 0.5) s += ' Os investimentos consumiram mais da metade do lucro bruto: marca e inovação têm retornos decrescentes, e parte do efeito só aparece nas próximas rodadas.';
+  else if (invest < 2) s += ' Investir quase nada protege o caixa agora, mas marca e inovação se depreciam, a participação tende a cair e o valor da empresa também.';
+  f.push(['Síntese financeira', s]);
+  return f;
+}
+
+/* ---------- 5. UTILITÁRIOS DE INTERFACE ---------- */
+const $ = id => document.getElementById(id);
+function esc(t) { return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function n1(x) { return x.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+function rs(x) { const v = Math.abs(x) < 0.05 ? 0 : x; return (v < 0 ? '−' : '') + 'R$ ' + n1(Math.abs(v)) + ' mil'; }
+function pct(x) { return n1(x) + '%'; }
+function corLucro(x) { return x < -0.05 ? 'text-red-700' : 'text-emerald-800'; }
+function nomeEmp(i) { const e = S.empresas[i]; return e.nome ? e.id + ' · ' + esc(e.nome) : 'Empresa ' + e.id; }
+function nomeLongo(i) { const e = S.empresas[i]; return 'Empresa ' + e.id + (e.nome ? ' · ' + esc(e.nome) : ''); }
+function eventoAtual() { return EVENTOS[S.eventos[S.rodada - 1]]; }
+function ir(tela) { S.tela = tela; salvar(); render(); window.scrollTo(0, 0); }
+function quad(i) { return '<span class="inline-block w-3 h-3 rounded-sm mr-1.5 align-middle" style="background:' + CORES[i] + '"></span>'; }
+
+function cartaoEvento(ev, compacto) {
+  const opp = ev.kind === 'opp';
+  return '<div class="rounded-2xl border p-4 ' + (opp ? 'bg-emerald-50 border-emerald-300' : 'bg-red-50 border-red-300') + '">' +
+    '<div class="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide">' +
+      '<span class="rounded-full px-2 py-0.5 ' + (opp ? 'bg-emerald-700 text-white' : 'bg-red-700 text-white') + '">' + (opp ? 'Oportunidade' : 'Ameaça') + '</span>' +
+      '<span class="text-slate-600">PESTEL · ' + ev.pestel + '</span></div>' +
+    '<div class="mt-2 font-display font-bold ' + (compacto ? 'text-lg' : 'text-2xl') + ' text-tinta">' + ev.icone + ' ' + ev.nome + '</div>' +
+    '<p class="mt-1 text-sm">' + ev.desc + '</p>' +
+    '<p class="mt-1 text-sm font-semibold">Efeito no jogo: ' + ev.efeito + '</p></div>';
+}
+
+function tabelaPlacar() {
+  const maxAbs = Math.max(1, ...S.empresas.map(e => Math.abs(valorEmp(e))));
+  const ult = S.historico[S.historico.length - 1];
+  return '<div class="space-y-3">' + S.empresas.map((e, i) => {
+    const lr = ult ? ult.linhas[i].lucro : null, v = valorEmp(e);
+    return '<div class="grid grid-cols-12 gap-x-3 gap-y-1 items-center">' +
+      '<div class="col-span-12 sm:col-span-3 font-semibold text-sm">' + quad(i) + nomeEmp(i) + '<div class="text-xs font-normal text-slate-500 pl-5">Marca ' + n1(e.marca) + ' · Inovação ' + n1(e.inov) + '</div></div>' +
+      '<div class="col-span-12 sm:col-span-4"><div class="text-[11px] text-slate-500">Participação de mercado</div><div class="flex items-center gap-2"><div class="flex-1 h-3 bg-faixa rounded-full overflow-hidden"><div class="h-full rounded-full" style="width:' + (e.share * 100).toFixed(1) + '%;background:' + CORES[i] + '"></div></div><span class="text-sm font-semibold tabular-nums w-14 text-right">' + pct(e.share * 100) + '</span></div></div>' +
+      '<div class="col-span-12 sm:col-span-5"><div class="text-[11px] text-slate-500">Valor da empresa · caixa: <span class="' + corLucro(e.caixa) + '">' + rs(e.caixa) + '</span>' + (lr !== null ? ' · última rodada: <span class="' + corLucro(lr) + '">' + rs(lr) + '</span>' : '') + '</div><div class="flex items-center gap-2"><div class="flex-1 h-3 bg-faixa rounded-full overflow-hidden"><div class="h-full rounded-full ' + (v < 0 ? 'bg-red-600' : 'bg-emerald-700') + '" style="width:' + (Math.abs(v) / maxAbs * 100).toFixed(1) + '%"></div></div><span class="text-sm font-bold tabular-nums w-28 text-right ' + corLucro(v) + '">' + rs(v) + '</span></div></div>' +
+    '</div>';
+  }).join('') + '</div>';
+}
+
+/* ---------- 6. TELAS ---------- */
+function render() {
+  if (modoEquipe()) return renderEquipe();
+  const chip = $('chip-rodada');
+  if (S.tela === 'setup') chip.classList.add('hidden');
+  else { chip.classList.remove('hidden'); chip.textContent = S.tela === 'final' ? 'Fim de jogo' : 'Rodada ' + S.rodada + '/' + RODADAS; }
+  const telas = { setup: telaSetup, painel: telaPainel, passa: telaPassa, coleta: telaColeta, decisao: telaDecisao, apurar: telaApurar, resultado: telaResultado, final: telaFinal };
+  $('app').innerHTML = telas[S.tela]();
+  if (S.tela === 'decisao') atualizarResumo();
+}
+
+function telaSetup() {
+  const c = S.cfg;
+  return '<section class="card p-6 sm:p-8">' +
+    '<h1 class="font-display font-bold text-3xl sm:text-4xl text-tinta">Da ideia ao mercado em dez rodadas.</h1>' +
+    '<p class="mt-3 max-w-3xl">Cada equipe funda uma startup e disputa o mesmo mercado com as demais. A cada rodada, as equipes leem o cenário, definem a proposta de valor, o preço e quanto investir em marketing e inovação. Todas começam iguais, com o mesmo capital. Vence a empresa com o maior <strong>Valor da Empresa</strong> (caixa mais ativos de marca e inovação) ao final da 10ª rodada.</p>' +
+
+    '<div class="mt-6"><h2 class="font-display font-bold text-xl text-tinta">Quantas empresas vão jogar?</h2><div class="mt-3 grid grid-cols-3 gap-3 max-w-md">' +
+      [4, 5, 6].map(k => '<label class="cursor-pointer block"><input type="radio" name="n" value="' + k + '" class="peer sr-only"' + (c.n === k ? ' checked' : '') + ' onchange="definirN(' + k + ')"><div class="rounded-xl border-2 border-slate-300 bg-white p-3 text-center font-bold text-lg peer-checked:border-tinta peer-checked:bg-indigo-50 peer-checked:ring-2 peer-checked:ring-indigo-700 hover:border-slate-500">' + k + '</div></label>').join('') + '</div></div>' +
+
+    '<div class="mt-6"><h2 class="font-display font-bold text-xl text-tinta">Como a turma vai jogar?</h2><div class="mt-3 grid sm:grid-cols-2 gap-3">' +
+      opcao('modo', 'simultaneo', 'Simultâneo: cada equipe no seu dispositivo', 'Todas as equipes decidem ao mesmo tempo, cada uma no próprio celular, e entregam um código de decisão ao professor.', c.modo === 'simultaneo') +
+      opcao('modo', 'prato', 'Revezamento: um único dispositivo', 'As equipes decidem em sequência no mesmo aparelho, com uma tela de troca entre os turnos.', c.modo !== 'simultaneo') + '</div>' +
+      '<p class="mt-3 text-sm">No modo simultâneo, este dispositivo é o painel do professor. As equipes abrem <span class="font-mono text-xs break-all bg-faixa rounded px-1 py-0.5">' + esc(linkEquipe()) + '</span> ou tocam em <button onclick="location.hash=\'#equipe\'" class="underline underline-offset-2 font-semibold text-tinta">Entrar como equipe</button> nesta tela.</p></div>' +
+
+    '<div class="mt-6"><h2 class="font-display font-bold text-xl text-tinta">Nome das startups</h2><p class="text-sm text-slate-600 mt-1">Opcional. Cada equipe pode batizar a sua empresa.</p><div class="mt-3 grid sm:grid-cols-2 gap-3">' + S.empresas.map((e, i) =>
+      '<div class="rounded-xl border-2 p-3 bg-white flex items-center gap-3" style="border-color:' + CORES[i] + '"><div class="font-display font-bold text-2xl w-8 text-center" style="color:' + CORES[i] + '">' + e.id + '</div>' +
+        '<input id="eq' + i + '" maxlength="30" value="' + esc(e.nome) + '" placeholder="Empresa ' + e.id + '" class="flex-1 min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm"></div>').join('') + '</div></div>' +
+
+    '<details class="mt-6 rounded-xl border border-slate-300 bg-white">' +
+      '<summary class="px-4 py-3 font-semibold">⚙️ Ajustes do professor</summary>' +
+      '<div class="px-4 pb-4 text-sm space-y-3">' +
+        '<p>Os valores padrão foram calibrados para que uma empresa média fature R$ 500 mil por rodada e tenha espaço para investir. A demanda total do mercado é a demanda por empresa multiplicada pelo número de empresas.</p>' +
+        '<div class="grid sm:grid-cols-2 gap-3">' +
+          '<label class="block">Demanda base por empresa, por rodada (R$ mil)<input id="cfg-demanda" type="number" min="100" step="50" value="' + c.demanda + '" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"></label>' +
+          '<label class="block">Custo fixo por rodada (R$ mil)<input id="cfg-fixo" type="number" min="0" step="1" value="' + c.fixo + '" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"></label>' +
+          '<label class="block">Capital inicial de cada empresa (R$ mil)<input id="cfg-capital" type="number" min="0" step="10" value="' + c.capital + '" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"></label>' +
+          '<label class="block">Custo do pivô (R$ mil)<input id="cfg-pivo" type="number" min="0" step="1" value="' + c.pivo + '" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"></label>' +
+          '<label class="block">Bônus da meta SMART (R$ mil)<input id="cfg-bonus" type="number" min="0" step="1" value="' + c.bonus + '" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"></label>' +
+        '</div></div></details>' +
+
+    '<div class="mt-6 flex flex-wrap items-center gap-4">' +
+      '<button onclick="iniciarJogo()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 text-lg hover:opacity-90">Iniciar o jogo</button>' +
+      '<button onclick="toggleRegras(true)" class="underline underline-offset-4 text-tinta font-semibold">Ver as regras completas</button>' +
+    '</div></section>';
+}
+
+const BTN_ENCERRAR = '<button onclick="encerrarAgora()" class="text-sm underline underline-offset-4 text-slate-600 hover:text-slate-900">Encerrar o jogo agora e ver o placar</button>';
+
+function telaPainel() {
+  const ev = eventoAtual(), sim = S.cfg.modo === 'simultaneo';
+  return '<section class="space-y-5">' +
+    '<div class="flex flex-wrap items-end justify-between gap-3"><div><div class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Painel geral</div>' +
+      '<h1 class="font-display font-bold text-3xl text-tinta">Rodada ' + S.rodada + ' de ' + RODADAS + '</h1></div>' +
+      '<div class="text-sm text-slate-600">Mercado: ' + rs(S.cfg.demanda * S.cfg.n) + ' por rodada · Custo fixo: ' + rs(S.cfg.fixo) + '</div></div>' +
+    '<div><div class="text-sm font-semibold mb-2">Cenário da rodada</div>' + cartaoEvento(ev) + '</div>' +
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-4">Participação de mercado e valor das empresas</h2>' + tabelaPlacar() +
+      (S.historico.length ? '' : '<p class="mt-4 text-sm text-slate-500">Todas as empresas partem com a mesma participação, o mesmo capital e os mesmos índices de Marca e Inovação.</p>') + '</div>' +
+    (S.historico.length > 0 ? '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-3">Evolução do valor das empresas</h2>' + graficoLinhas() + '</div>' : '') +
+    '<div class="card p-5 flex flex-wrap items-center justify-between gap-4"><p class="text-sm max-w-xl">' + (sim
+        ? 'Modo <strong>Simultâneo</strong>: as equipes decidem ao mesmo tempo nos próprios dispositivos e entregam um código. O mercado só é apurado depois que todos os códigos forem registrados.'
+        : 'Modo <strong>Revezamento</strong>: as equipes decidem em sequência neste dispositivo. As decisões ficam ocultas e o mercado só é apurado depois que todas confirmarem.') + '</p>' +
+      '<button onclick="iniciarRodada()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 hover:opacity-90">' + (sim ? 'Abrir a rodada para decisões' : 'Iniciar decisões da rodada') + '</button></div>' +
+    (S.historico.length ? '<div class="text-right no-print">' + BTN_ENCERRAR + '</div>' : '') +
+  '</section>';
+}
+
+function telaPassa() {
+  const i = S.turno;
+  return '<section class="min-h-[60vh] flex items-center justify-center"><div class="card p-8 sm:p-12 text-center max-w-xl w-full border-4" style="border-color:' + CORES[i] + '">' +
+    '<div class="text-5xl">🤝</div>' +
+    '<div class="mt-3 text-sm font-bold uppercase tracking-widest text-slate-500">Troca de equipe · Rodada ' + S.rodada + '/' + RODADAS + '</div>' +
+    '<h1 class="mt-3 font-display font-bold text-3xl sm:text-4xl">Passe o dispositivo para a <span style="color:' + CORES[i] + '">' + nomeLongo(i) + '</span></h1>' +
+    '<p class="mt-4 text-slate-600">As decisões das outras empresas estão ocultas. Só a equipe da vez deve olhar a tela.</p>' +
+    '<button onclick="ir(\'decisao\')" class="mt-6 rounded-xl text-white font-bold px-8 py-4 text-lg" style="background:' + CORES[i] + '">Iniciar Turno</button>' +
+  '</div></section>';
+}
+
+function opcao(nome, valor, titulo, desc, marcado) {
+  return '<label class="cursor-pointer block"><input type="radio" name="' + nome + '" value="' + valor + '" class="peer sr-only"' + (marcado ? ' checked' : '') + ' onchange="atualizarResumo()">' +
+    '<div class="h-full rounded-xl border-2 border-slate-300 bg-white p-3 peer-checked:border-tinta peer-checked:bg-indigo-50 peer-checked:ring-2 peer-checked:ring-indigo-700 peer-focus-visible:ring-2 peer-focus-visible:ring-sinal hover:border-slate-500">' +
+    '<div class="font-bold">' + titulo + '</div>' + (desc ? '<div class="text-sm text-slate-600 mt-0.5">' + desc + '</div>' : '') + '</div></label>';
+}
+function bloco(letra, titulo, ajuda, corpo) {
+  return '<div class="card p-5"><div class="flex items-baseline gap-2"><span class="font-display font-bold text-2xl text-sinal">' + letra + '</span><h2 class="font-display font-bold text-xl text-tinta">' + titulo + '</h2></div>' +
+    '<p class="text-sm text-slate-600 mt-1 mb-3">' + ajuda + '</p>' + corpo + '</div>';
+}
+function controle(id, rotuloTxt, max, valor, extra) {
+  return '<div><div class="flex justify-between gap-3 text-sm font-semibold"><label for="' + id + '">' + rotuloTxt + '</label><span id="' + id + '-v" class="tabular-nums whitespace-nowrap"></span></div>' +
+    '<input id="' + id + '" type="range" min="0" max="' + max + '" step="0.5" value="' + valor + '" oninput="' + (extra || '') + 'atualizarResumo()">' + '</div>';
+}
+
+function blocosDecisao(ant, bonusTxt, dicaCenario, pivoTxt) {
+  return bloco('A', 'Postura diante do cenário', dicaCenario,
+      '<div class="grid sm:grid-cols-2 gap-3">' + Object.keys(TOWS).map(k => opcao('tows', k, TOWS[k].nome, TOWS[k].desc, ant.tows === k)).join('') + '</div>') +
+
+    bloco('B', 'Proposta de valor', 'Define a margem e como o cliente reage ao seu preço. Mudar de proposta em relação à rodada anterior é um pivô e custa ' + pivoTxt + '.',
+      '<div class="grid sm:grid-cols-3 gap-3">' + Object.keys(PORTER).map(k => opcao('porter', k, PORTER[k].nome, PORTER[k].desc, ant.porter === k)).join('') + '</div>') +
+
+    bloco('C', 'Preço', 'O preço pesa 50% na decisão do cliente e deve ser coerente com a proposta de valor.',
+      '<div class="grid grid-cols-3 gap-3">' + Object.keys(PRECO).map(k => opcao('preco', k, PRECO[k], '', ant.preco === k)).join('') + '</div>') +
+
+    bloco('D', 'Marketing e vendas', 'Constrói a Marca (30% da atratividade). O efeito acumula, mas metade se perde a cada rodada.',
+      controle('mkt', 'Marketing (R$ 0 a R$ 10 mil)', MAX_MKT, ant.mkt || 0)) +
+
+    bloco('E', 'Investimento em inovação', 'Distribua até R$ 15 mil entre os três tipos de inovação. O total alimenta o Índice de Inovação (20% da atratividade).',
+      '<div class="space-y-4">' +
+        controle('vacas', '🔧 Incremental: melhoria de processos. Cada R$ 1 mil reduz R$ 0,25 mil do custo fixo (até R$ 3 mil).', MAX_PD, ant.vacas || 0, 'limitarInov(this);') +
+        controle('estrelas', '💡 De produto: novos recursos e versões. Até +1,5 p.p. de margem, se o marketing for de R$ 4 mil ou mais.', MAX_PD, ant.estrelas || 0, 'limitarInov(this);') +
+        controle('interr', '🚀 Radical: aposta em algo novo para o mercado. Risco alto (mínimo R$ 1 mil), com ganho permanente de margem se der certo.', MAX_PD, ant.interr || 0, 'limitarInov(this);') +
+        '<div class="text-sm font-semibold">Total em inovação: <span id="pd-total" class="tabular-nums"></span> de R$ 15,0 mil</div></div>') +
+
+    bloco('F', 'Meta SMART da rodada', 'Se a meta for matematicamente atingida, a empresa recebe ' + bonusTxt + '.',
+      '<div class="grid sm:grid-cols-2 gap-3">' + Object.keys(SMART).map(k => opcao('smart', k, SMART[k].nome, SMART[k].desc, ant.smart === k)).join('') + '</div>');
+}
+
+function telaDecisao() {
+  const i = S.turno, emp = S.empresas[i], ev = eventoAtual();
+  const ant = S.historico.length ? S.historico[S.historico.length - 1].linhas[i].d : {};
+  return '<section class="space-y-5">' +
+    '<div class="rounded-2xl p-5 text-white" style="background:' + CORES[i] + '"><div class="text-sm font-bold uppercase tracking-wide opacity-90">Turno confidencial · Rodada ' + S.rodada + '/' + RODADAS + '</div>' +
+      '<h1 class="font-display font-bold text-3xl">' + nomeLongo(i) + '</h1>' +
+      '<div class="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">' +
+        [['Participação', pct(emp.share * 100)], ['Caixa', rs(emp.caixa)], ['Valor da empresa', rs(valorEmp(emp))], ['Índice de Marca', n1(emp.marca) + ' / 100'], ['Índice de Inovação', n1(emp.inov) + ' / 100']].map(x =>
+          '<div class="bg-white/15 rounded-lg px-3 py-2"><div class="text-xs opacity-90">' + x[0] + '</div><div class="font-bold tabular-nums">' + x[1] + '</div></div>').join('') +
+      '</div></div>' +
+    cartaoEvento(ev, true) +
+    blocosDecisao(ant, 'bônus de ' + rs(S.cfg.bonus), 'Leia o cenário acima e escolha a postura da empresa para esta rodada.', rs(S.cfg.pivo)) +
+    '<div class="card p-5 sticky bottom-2 shadow-lg"><div class="flex flex-wrap items-center justify-between gap-3">' +
+      '<div class="text-sm"><div>Desembolso comprometido na rodada (custo fixo padrão + marketing + inovação):</div><div id="resumo" class="font-bold text-lg tabular-nums"></div><div id="erro" class="text-red-700 font-semibold"></div></div>' +
+      '<button onclick="confirmarTurno()" class="rounded-xl text-white font-bold px-6 py-3" style="background:' + CORES[i] + '">Confirmar decisões e encerrar turno</button></div></div>' +
+  '</section>';
+}
+
+function resumoDecisao(d) {
+  return '<ul class="text-sm space-y-1">' + [['Postura', TOWS[d.tows].nome], ['Proposta de valor', PORTER[d.porter].nome], ['Preço', PRECO[d.preco]], ['Marketing', rs(d.mkt)],
+    ['Inovação', rs(d.vacas + d.estrelas + d.interr) + ' (incremental ' + n1(d.vacas) + ' · de produto ' + n1(d.estrelas) + ' · radical ' + n1(d.interr) + ')'], ['Meta SMART', SMART[d.smart].nome]]
+    .map(x => '<li><span class="text-slate-500">' + x[0] + ':</span> <strong>' + x[1] + '</strong></li>').join('') + '</ul>';
+}
+
+/* ----- Painel do professor: coleta dos códigos (modo simultâneo) ----- */
+function telaColeta() {
+  const N = S.cfg.n, n = S.decisoes.filter(Boolean).length, m = msgColeta; msgColeta = null;
+  return '<section class="space-y-5">' +
+    '<div><div class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Decisões simultâneas</div><h1 class="font-display font-bold text-3xl text-tinta">Rodada ' + S.rodada + ' de ' + RODADAS + '</h1></div>' +
+    cartaoEvento(eventoAtual()) +
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-4">Situação das empresas</h2>' + tabelaPlacar() + '</div>' +
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta">Como decidir</h2>' +
+      '<ol class="mt-2 text-sm list-decimal pl-5 space-y-1"><li>Cada equipe abre o jogo no próprio dispositivo em <strong>modo equipe</strong>: <span class="font-mono text-xs break-all bg-faixa rounded px-1 py-0.5">' + esc(linkEquipe()) + '</span></li>' +
+      '<li>Escolhe a letra da empresa, confere a rodada <strong>' + S.rodada + '</strong>, toma as decisões e toca em <strong>Gerar código de decisão</strong>.</li>' +
+      '<li>Entrega o código de 9 caracteres ao professor, que o registra abaixo. O código não revela a decisão.</li></ol></div>' +
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta">Registro dos códigos (' + n + ' de ' + N + ')</h2>' +
+      '<div class="mt-3 flex flex-wrap gap-2"><input id="cod" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="14" placeholder="XXX-XXX-XXX" onkeydown="if(event.key===\'Enter\')registrarCodigo()" class="flex-1 min-w-[12rem] rounded-xl border-2 border-slate-400 px-4 py-3 font-mono text-xl uppercase tracking-widest">' +
+        '<button onclick="registrarCodigo()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 hover:opacity-90">Registrar código</button></div>' +
+      '<div id="cod-msg" class="mt-2 text-sm font-semibold min-h-[1.25rem] ' + (m && m.ok ? 'text-emerald-800' : 'text-red-700') + '">' + (m ? esc(m.txt) : '') + '</div>' +
+      '<div class="mt-3 grid sm:grid-cols-2 gap-3">' + S.empresas.map((e, i) => { const d = S.decisoes[i];
+        return '<div class="rounded-xl border-2 p-3 bg-white flex items-center justify-between gap-2" style="border-color:' + CORES[i] + '"><div><div class="font-bold">' + nomeEmp(i) + '</div>' +
+          '<div class="text-sm ' + (d ? 'text-emerald-800 font-semibold' : 'text-slate-500') + '">' + (d ? '✅ ' + (d.auto ? 'Decisão automática aplicada' : 'Código recebido') : '⏳ Aguardando código') + '</div></div>' +
+          (d ? '<button onclick="removerDecisao(' + i + ')" class="text-sm underline underline-offset-2 text-slate-600">Remover</button>'
+             : '<button onclick="decisaoAutomatica(' + i + ')" class="text-sm underline underline-offset-2 text-slate-600 text-right">Aplicar decisão automática</button>') + '</div>'; }).join('') + '</div>' +
+      '<p class="mt-3 text-xs text-slate-500">Um novo código da mesma empresa substitui o anterior. A decisão automática repete a rodada anterior da empresa; na rodada 1, aplica baixo custo, preço médio, postura cautelosa e nenhum investimento.</p></div>' +
+    '<div class="flex justify-end"><button onclick="apurar()"' + (n < N ? ' disabled' : '') + ' class="rounded-xl bg-tinta text-white font-bold px-8 py-4 text-lg hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed">Apurar a rodada</button></div>' +
+  '</section>';
+}
+function registrarCodigo() {
+  const r = decodificar($('cod').value);
+  if (r.erro) msgColeta = { ok: false, txt: r.erro };
+  else if (r.emp >= S.cfg.n) msgColeta = { ok: false, txt: 'Este código é da Empresa ' + LETRAS[r.emp] + ', que não participa desta partida.' };
+  else if (r.rodada !== S.rodada) msgColeta = { ok: false, txt: 'Este código é da rodada ' + r.rodada + ' (Empresa ' + LETRAS[r.emp] + '). A rodada atual é a ' + S.rodada + '.' };
+  else { msgColeta = { ok: true, txt: 'Código da Empresa ' + LETRAS[r.emp] + (S.decisoes[r.emp] ? ' substituído.' : ' registrado.') }; S.decisoes[r.emp] = r.d; }
+  const manter = msgColeta.ok ? '' : $('cod').value;
+  salvar(); render(); $('cod').value = manter; $('cod').focus();
+}
+function decisaoAutomatica(i) {
+  const ant = S.historico.length ? S.historico[S.historico.length - 1].linhas[i].d : { tows: 'WT', porter: 'custo', preco: 'medio', smart: 'margem', mkt: 0, vacas: 0, estrelas: 0, interr: 0 };
+  S.decisoes[i] = Object.assign({}, ant, { auto: true }); salvar(); render();
+}
+function removerDecisao(i) { S.decisoes[i] = null; salvar(); render(); }
+
+/* ----- Dispositivo da equipe (modo simultâneo) ----- */
+function irEq(tela) { T.tela = tela; salvarT(); render(); window.scrollTo(0, 0); }
+function chipEquipe() {
+  const chip = $('chip-rodada'); chip.classList.remove('hidden');
+  chip.textContent = T.emp === null ? 'Modo equipe' : 'Empresa ' + LETRAS[T.emp] + ' · Rodada ' + T.rodada + '/' + RODADAS;
+}
+function renderEquipe() {
+  if (!T) T = carregarT() || novoT();
+  chipEquipe();
+  $('app').innerHTML = { escolha: eqEscolha, form: eqForm, codigo: eqCodigo }[T.tela]();
+  if (T.tela === 'form') atualizarResumo();
+}
+function eqEscolha() {
+  return '<section class="card p-6 sm:p-8"><div class="text-sm font-bold uppercase tracking-widest text-slate-500">Modo equipe</div>' +
+    '<h1 class="font-display font-bold text-3xl text-tinta mt-1">Qual é a letra da sua empresa?</h1>' +
+    '<p class="mt-2 text-sm">Neste dispositivo a equipe toma as decisões de cada rodada e gera um código para entregar ao professor. O cenário, o placar e os resultados aparecem no painel projetado. Use a letra indicada pelo professor.</p>' +
+    '<div class="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-3">' + LETRAS.split('').map((l, i) =>
+      '<button onclick="eqEscolher(' + i + ')" class="rounded-xl p-4 text-white text-center hover:opacity-90" style="background:' + CORES[i] + '"><div class="text-xs font-bold uppercase tracking-wide opacity-90">Empresa</div><div class="font-display font-bold text-4xl">' + l + '</div></button>').join('') + '</div>' +
+    '<button onclick="location.hash=\'\'" class="mt-6 text-sm underline underline-offset-4 text-slate-600">Voltar ao painel do professor</button></section>';
+}
+function eqEscolher(i) { T.emp = i; irEq('form'); }
+function eqForm() {
+  const cor = CORES[T.emp];
+  return '<section class="space-y-5">' +
+    '<div class="rounded-2xl p-5 text-white" style="background:' + cor + '"><div class="text-sm font-bold uppercase tracking-wide opacity-90">Decisão confidencial da equipe</div>' +
+      '<h1 class="font-display font-bold text-3xl">Empresa ' + LETRAS[T.emp] + '</h1>' +
+      '<label class="mt-3 inline-flex items-center gap-2 bg-white/15 rounded-lg px-3 py-2 text-sm font-semibold">Rodada desta decisão <select id="eq-rodada" onchange="T.rodada=+this.value;salvarT();chipEquipe()" class="rounded-md text-slate-900 px-2 py-1 font-bold">' +
+        Array.from({ length: RODADAS }, (_, k) => '<option value="' + (k + 1) + '"' + (k + 1 === T.rodada ? ' selected' : '') + '>' + (k + 1) + '</option>').join('') + '</select></label></div>' +
+    '<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm">Consulte no <strong>painel projetado</strong> o cenário da rodada, a participação de mercado, o caixa e os índices de Marca e Inovação da sua empresa antes de decidir. A rodada escolhida acima deve ser a mesma do painel.</div>' +
+    blocosDecisao(T.ult || {}, 'um bônus (R$ 5 mil no padrão)', 'Veja o cenário no painel projetado e escolha a postura da empresa para esta rodada.', 'R$ 10 mil no padrão') +
+    '<div class="card p-5 sticky bottom-2 shadow-lg"><div class="flex flex-wrap items-center justify-between gap-3">' +
+      '<div class="text-sm"><div>Investimento da rodada (marketing + inovação):</div><div id="resumo" class="font-bold text-lg tabular-nums"></div><div id="erro" class="text-red-700 font-semibold"></div></div>' +
+      '<button onclick="eqGerar()" class="rounded-xl text-white font-bold px-6 py-3" style="background:' + cor + '">Gerar código de decisão</button></div></div>' +
+  '</section>';
+}
+function eqGerar() {
+  const d = lerDecisao(); if (!d) return;
+  T.ult = d; T.codigo = codificar(T.emp, T.rodada, d); irEq('codigo');
+}
+function eqCodigo() {
+  const cor = CORES[T.emp], fim = T.rodada >= RODADAS;
+  return '<section class="space-y-5"><div class="card p-6 sm:p-10 text-center border-4" style="border-color:' + cor + '">' +
+    '<div class="text-sm font-bold uppercase tracking-widest text-slate-500">Empresa ' + LETRAS[T.emp] + ' · Rodada ' + T.rodada + '/' + RODADAS + '</div>' +
+    '<h1 class="mt-2 font-display font-bold text-2xl text-tinta">Código de decisão</h1>' +
+    '<div class="mt-4 font-mono font-bold text-4xl sm:text-6xl tracking-widest break-all" style="color:' + cor + '">' + T.codigo + '</div>' +
+    '<p class="mt-4 text-slate-600">Dite ou mostre este código ao professor. Ele não revela as decisões da equipe. O código não usa 0, 1, I nem O.</p></div>' +
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-2">Decisões registradas neste código</h2>' + resumoDecisao(T.ult) + '</div>' +
+    '<div class="flex flex-wrap justify-end gap-3"><button onclick="irEq(\'form\')" class="rounded-xl border-2 border-tinta text-tinta font-bold px-6 py-3 hover:bg-indigo-50">Corrigir decisões</button>' +
+      (fim ? '<span class="self-center text-sm font-semibold">Última rodada: acompanhe o placar final no painel.</span>'
+           : '<button onclick="eqProxima()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 hover:opacity-90">Avançar para a rodada ' + (T.rodada + 1) + '</button>') + '</div></section>';
+}
+function eqProxima() { T.rodada = Math.min(RODADAS, T.rodada + 1); T.codigo = null; irEq('form'); }
+
+function telaApurar() {
+  return '<section class="min-h-[60vh] flex items-center justify-center"><div class="card p-8 sm:p-12 text-center max-w-xl w-full border-4 border-tinta">' +
+    '<div class="text-5xl">📊</div><div class="mt-3 text-sm font-bold uppercase tracking-widest text-slate-500">Rodada ' + S.rodada + '/' + RODADAS + '</div>' +
+    '<h1 class="mt-3 font-display font-bold text-3xl text-tinta">Todas as empresas decidiram.</h1>' +
+    '<p class="mt-3 text-slate-600">Devolva o dispositivo ao professor ou projete a tela para a turma. O mercado será apurado agora.</p>' +
+    '<button onclick="apurar()" class="mt-6 rounded-xl bg-tinta text-white font-bold px-8 py-4 text-lg hover:opacity-90">Apurar a rodada</button></div></section>';
+}
+
+function telaResultado() {
+  const h = S.historico[S.historico.length - 1], ev = EVENTOS[h.evento];
+  const ordem = h.linhas.map((L, i) => i).sort((a, b) => h.linhas[b].lucro - h.linhas[a].lucro);
+  const ultima = S.rodada >= RODADAS;
+  return '<section class="space-y-5">' +
+    '<div><div class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Resultado</div><h1 class="font-display font-bold text-3xl text-tinta">Rodada ' + h.rodada + ' de ' + RODADAS + '</h1></div>' +
+    cartaoEvento(ev, true) +
+    (h.guerra ? '<div class="rounded-2xl border-2 border-red-700 bg-red-100 p-4"><div class="font-display font-bold text-xl text-red-800">⚔️ Guerra de preços</div><p class="text-sm mt-1">Empresas ' +
+      h.linhas.map((L, i) => L.guerra ? S.empresas[i].id : null).filter(Boolean).join(', ') + ' disputaram a mesma posição de baixo custo com preço baixo. A disputa reduziu em 40% o lucro bruto de cada uma.</p></div>' : '') +
+
+    '<div class="card p-5 overflow-x-auto"><h2 class="font-display font-bold text-xl text-tinta mb-3">Demonstrativo da rodada</h2>' +
+      '<table class="w-full text-sm min-w-[720px]"><thead><tr class="text-left text-xs uppercase text-slate-500 border-b border-slate-300">' +
+        '<th class="py-2 pr-2">Empresa</th><th class="pr-2">Proposta</th><th class="pr-2 text-right">Particip.</th><th class="pr-2 text-right">Receita</th><th class="pr-2 text-right">Margem</th><th class="pr-2 text-right">Resultado</th><th class="pr-2 text-right">Caixa</th><th class="text-right">Valor da empresa</th></tr></thead><tbody>' +
+      ordem.map(i => { const L = h.linhas[i];
+        return '<tr class="border-b border-slate-200"><td class="py-2 pr-2 font-semibold">' + quad(i) + nomeEmp(i) + '</td>' +
+          '<td class="pr-2">' + PORTER[L.d.porter].nome + ' · Preço ' + PRECO[L.d.preco] + '</td>' +
+          '<td class="pr-2 text-right tabular-nums">' + pct(L.share * 100) + '</td><td class="pr-2 text-right tabular-nums">' + rs(L.receita) + '</td><td class="pr-2 text-right tabular-nums">' + pct(L.margem) + '</td>' +
+          '<td class="pr-2 text-right tabular-nums font-bold ' + corLucro(L.lucro) + '">' + rs(L.lucro) + '</td><td class="pr-2 text-right tabular-nums ' + corLucro(L.caixa) + '">' + rs(L.caixa) + '</td><td class="text-right tabular-nums font-bold ' + corLucro(L.valor) + '">' + rs(L.valor) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>' +
+
+    '<div><h2 class="font-display font-bold text-xl text-tinta mb-3">Feedback educacional por empresa</h2><div class="space-y-3">' +
+      h.linhas.map((L, i) => blocoFeedback(L, i, i === ordem[0])).join('') + '</div></div>' +
+
+    '<div class="flex flex-wrap items-center justify-end gap-4 no-print">' + (ultima ? '' : BTN_ENCERRAR) + '<button onclick="proximaRodada()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 hover:opacity-90">' + (ultima ? 'Ver o placar final' : 'Ir para a rodada ' + (S.rodada + 1)) + '</button></div>' +
+  '</section>';
+}
+
+function blocoFeedback(L, i, aberto) {
+  const d = L.d;
+  const dre = [
+    ['Receita (' + pct(L.share * 100) + ' do mercado)', L.receita],
+    ['Lucro bruto (margem ' + pct(L.margem) + (L.fatorEvento !== 1 ? ', cenário ' + (L.fatorEvento > 1 ? '+' : '−') + pct(Math.abs(L.fatorEvento - 1) * 100) : '') + ')', L.brutoBase]
+  ];
+  if (L.guerra) dre.push(['Guerra de preços (−40%)', -L.perdaGuerra]);
+  dre.push(['Custo fixo', -L.fixo], ['Marketing e vendas', -d.mkt], ['Inovação', -L.pd]);
+  if (L.pivo) dre.push(['Custo do pivô', -L.pivo]);
+  if (L.juros) dre.push(['Juros sobre caixa negativo', -L.juros]);
+  if (L.bonus) dre.push(['Bônus da meta SMART', L.bonus]);
+  return '<details class="card overflow-hidden"' + (aberto ? ' open' : '') + '><summary class="px-5 py-3 flex flex-wrap items-center justify-between gap-2 border-l-8" style="border-color:' + CORES[i] + '">' +
+      '<span class="font-bold">' + nomeLongo(i) + '</span><span class="text-sm">' + TOWS[d.tows].curto + (d.auto ? ' · decisão automática' : '') + ' · Meta ' + (L.metaOk ? '✅' : '❌') + ' · <span class="font-bold ' + corLucro(L.lucro) + '">' + rs(L.lucro) + '</span> <span class="text-slate-400">▾</span></span></summary>' +
+    '<div class="px-5 pb-5 pt-2 grid md:grid-cols-5 gap-5">' +
+      '<div class="md:col-span-2"><table class="w-full text-sm">' + dre.map(r => '<tr class="border-b border-slate-200"><td class="py-1.5 pr-2">' + r[0] + '</td><td class="text-right tabular-nums whitespace-nowrap">' + rs(r[1]) + '</td></tr>').join('') +
+        '<tr class="font-bold"><td class="py-1.5 pr-2">Resultado da rodada</td><td class="text-right tabular-nums whitespace-nowrap ' + corLucro(L.lucro) + '">' + rs(L.lucro) + '</td></tr>' +
+        '<tr><td class="py-1.5 pr-2">Caixa (antes: ' + rs(L.caixaAnt) + ')</td><td class="text-right tabular-nums whitespace-nowrap ' + corLucro(L.caixa) + '">' + rs(L.caixa) + '</td></tr></table>' +
+        '<div class="mt-3 text-xs text-slate-600">Índice de Marca: ' + n1(L.marcaAnt) + ' → ' + n1(L.marca) + ' · Índice de Inovação: ' + n1(L.inovAnt) + ' → ' + n1(L.inov) + '</div></div>' +
+      '<div class="md:col-span-3 space-y-2 text-sm leading-relaxed">' + L.feedback.map(f => '<p><strong class="text-tinta">' + f[0] + '.</strong> ' + esc(f[1]) + '</p>').join('') + '</div>' +
+    '</div></details>';
+}
+
+function legenda() { return S.empresas.map((e, i) => '<span>' + quad(i) + (e.nome ? esc(e.nome) : 'Empresa ' + e.id) + '</span>').join(''); }
+function graficoLinhas() {
+  const W = 640, H = 240, mE = 56, mD = 12, mT = 12, mB = 28, n = S.historico.length;
+  const v0 = S.cfg.capital + INTANG * (idx(4, 5) + idx(5, 7));
+  const series = S.empresas.map((e, i) => [v0].concat(S.historico.map(h => h.linhas[i].valor)));
+  let mn = Math.min(0, ...series.flat()), mx = Math.max(0, ...series.flat());
+  if (mx - mn < 1) mx = mn + 1;
+  const x = k => mE + (W - mE - mD) * k / RODADAS, y = v => mT + (H - mT - mB) * (1 - (v - mn) / (mx - mn));
+  let g = '';
+  for (let k = 0; k <= 4; k++) { const v = mn + (mx - mn) * k / 4; g += '<line x1="' + mE + '" x2="' + (W - mD) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="#d9dcea"/><text x="' + (mE - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + Math.round(v) + '</text>'; }
+  g += '<line x1="' + mE + '" x2="' + (W - mD) + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="#475569"/>';
+  for (let k = 0; k <= RODADAS; k++) g += '<text x="' + x(k) + '" y="' + (H - 8) + '" text-anchor="middle" font-size="11" fill="#64748b">' + k + '</text>';
+  series.forEach((s, i) => {
+    g += '<polyline fill="none" stroke="' + CORES[i] + '" stroke-width="2.5" points="' + s.map((v, k) => x(k) + ',' + y(v)).join(' ') + '"/>';
+    g += '<circle cx="' + x(n) + '" cy="' + y(s[n]) + '" r="4" fill="' + CORES[i] + '"/>';
+  });
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="w-full h-auto" role="img" aria-label="Valor das empresas por rodada, em R$ mil">' + g + '</svg>' +
+    '<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs mt-1">' + legenda() + '<span class="text-slate-500">Eixo vertical em R$ mil; eixo horizontal em rodadas.</span></div>';
+}
+
+function telaFinal() {
+  const ordem = S.empresas.map((e, i) => i).sort((a, b) => valorEmp(S.empresas[b]) - valorEmp(S.empresas[a]));
+  const v = ordem[0], nJ = S.historico.length, antecipado = nJ < RODADAS;
+  const stats = S.empresas.map((e, i) => {
+    const ls = S.historico.map(h => h.linhas[i]), cont = {};
+    ls.forEach(L => { cont[L.d.porter] = (cont[L.d.porter] || 0) + 1; });
+    const dom = Object.keys(cont).sort((a, b) => cont[b] - cont[a])[0];
+    return { receita: ls.reduce((s, L) => s + L.receita, 0), shareMedio: ls.reduce((s, L) => s + L.share, 0) / ls.length,
+      invest: ls.reduce((s, L) => s + L.d.mkt + L.pd, 0), metas: ls.filter(L => L.metaOk).length, guerras: ls.filter(L => L.guerra).length,
+      pivos: ls.filter(L => L.pivo > 0).length, radicais: ls.filter(L => L.interrSucesso).length, tentativas: ls.filter(L => L.interrRolou).length,
+      negativo: ls.filter(L => L.caixa < 0).length, dom: dom, vezes: cont[dom],
+      leituras: ls.filter((L, k) => (EVENTOS[S.historico[k].evento].kind === 'opp') === (L.d.tows === 'SO')).length };
+  });
+  const medalha = ['🥇', '🥈', '🥉', '4º', '5º', '6º'];
+  return '<section class="space-y-5">' +
+    '<div class="rounded-2xl p-6 sm:p-10 text-white text-center" style="background:' + CORES[v] + '"><div class="text-5xl">🏆</div>' +
+      '<div class="mt-2 text-sm font-bold uppercase tracking-widest opacity-90">Empresa vencedora após ' + nJ + (nJ === 1 ? ' rodada' : ' rodadas') + '</div>' +
+      '<h1 class="font-display font-bold text-4xl sm:text-5xl mt-1">' + nomeLongo(v) + '</h1>' +
+      '<div class="mt-3 text-2xl font-bold tabular-nums">Valor da Empresa: ' + rs(valorEmp(S.empresas[v])) + '</div>' +
+      (antecipado ? '<div class="mt-2 text-sm opacity-95">Jogo encerrado antes da ' + RODADAS + 'ª rodada: o placar considera ' + nJ + (nJ === 1 ? ' rodada apurada' : ' rodadas apuradas') + '.</div>' : '') + '</div>' +
+
+    '<div class="card p-5 overflow-x-auto"><h2 class="font-display font-bold text-xl text-tinta mb-3">Placar final detalhado</h2>' +
+      '<table class="w-full text-sm min-w-[820px]"><thead><tr class="text-left text-xs uppercase text-slate-500 border-b border-slate-300">' +
+      '<th class="py-2 pr-2">#</th><th class="pr-2">Empresa</th><th class="pr-2 text-right">Valor da empresa</th><th class="pr-2 text-right">Caixa</th><th class="pr-2 text-right">Marca + Inovação</th><th class="pr-2 text-right">Receita total</th><th class="pr-2 text-right">Particip. média</th><th class="pr-2 text-right">Investido</th><th class="pr-2 text-right">Metas</th><th class="pr-2 text-right">Pivôs</th><th class="text-right">Guerras</th></tr></thead><tbody>' +
+      ordem.map((i, p) => { const e = S.empresas[i], s = stats[i];
+        return '<tr class="border-b border-slate-200' + (p === 0 ? ' bg-amber-50' : '') + '"><td class="py-2 pr-2">' + medalha[p] + '</td><td class="pr-2 font-semibold">' + quad(i) + nomeEmp(i) + '</td>' +
+          '<td class="pr-2 text-right tabular-nums font-bold ' + corLucro(valorEmp(e)) + '">' + rs(valorEmp(e)) + '</td><td class="pr-2 text-right tabular-nums ' + corLucro(e.caixa) + '">' + rs(e.caixa) + '</td><td class="pr-2 text-right tabular-nums">' + rs(INTANG * (e.marca + e.inov)) + '</td>' +
+          '<td class="pr-2 text-right tabular-nums">' + rs(s.receita) + '</td><td class="pr-2 text-right tabular-nums">' + pct(s.shareMedio * 100) + '</td><td class="pr-2 text-right tabular-nums">' + rs(s.invest) + '</td>' +
+          '<td class="pr-2 text-right tabular-nums">' + s.metas + '/' + nJ + '</td><td class="pr-2 text-right tabular-nums">' + s.pivos + '</td><td class="text-right tabular-nums">' + s.guerras + '</td></tr>'; }).join('') +
+      '</tbody></table><p class="text-xs text-slate-500 mt-2">Valor da empresa = caixa + ativos intangíveis (R$ ' + INTANG + ' mil por ponto dos índices de Marca e Inovação).</p></div>' +
+
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-3">Evolução do valor das empresas</h2>' + graficoLinhas() + '</div>' +
+
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-3">Trajetória empreendedora de cada equipe</h2><div class="space-y-3 text-sm leading-relaxed">' +
+      ordem.map(i => { const s = stats[i];
+        return '<p><strong style="color:' + CORES[i] + '">' + nomeEmp(i) + '.</strong> Proposta de valor predominante: ' + PORTER[s.dom].nome + ' (' + s.vezes + ' de ' + nJ + ' rodadas), com ' + s.pivos + ' pivô(s). Postura alinhada ao cenário em ' + s.leituras + ' de ' + nJ + ' rodadas. Apostas em inovação radical: ' + s.radicais + ' bem-sucedida(s) em ' + s.tentativas + ' tentativa(s). ' +
+          (s.pivos >= 4 ? 'Pivôs frequentes impedem a construção de uma vantagem sustentável e consomem caixa.' : s.pivos === 0 ? 'A consistência da proposta de valor favorece o acúmulo de marca e inovação ao longo do tempo.' : 'Pivôs pontuais são legítimos quando respondem a evidências do mercado.') +
+          (s.negativo > 0 ? ' O caixa fechou negativo em ' + s.negativo + ' rodada(s), o que gerou juros e expôs a empresa ao risco de mortalidade.' : '') +
+          (s.guerras >= 3 ? ' A participação repetida em guerras de preços indica falha em antecipar o movimento dos concorrentes.' : '') + '</p>'; }).join('') +
+    '</div></div>' +
+
+    '<div class="card p-5"><h2 class="font-display font-bold text-xl text-tinta mb-3">Histórico de cenários e decisões</h2><div class="overflow-x-auto"><table class="w-full text-sm min-w-[820px]"><thead><tr class="text-left text-xs uppercase text-slate-500 border-b border-slate-300"><th class="py-2 pr-2">Rod.</th><th class="pr-2">Cenário</th>' +
+      S.empresas.map((e, i) => '<th class="pr-2" style="color:' + CORES[i] + '">' + (e.nome ? esc(e.nome) : 'Empresa ' + e.id) + '</th>').join('') + '</tr></thead><tbody>' +
+      S.historico.map(h => '<tr class="border-b border-slate-200 align-top"><td class="py-2 pr-2">' + h.rodada + '</td><td class="pr-2">' + EVENTOS[h.evento].icone + ' ' + EVENTOS[h.evento].nome + (h.guerra ? ' ⚔️' : '') + '</td>' +
+        h.linhas.map(L => '<td class="pr-2"><div>' + PORTER[L.d.porter].nome + ' · ' + PRECO[L.d.preco] + '</div><div class="tabular-nums font-semibold ' + corLucro(L.lucro) + '">' + rs(L.lucro) + '</div></td>').join('') + '</tr>').join('') +
+      '</tbody></table></div><p class="text-xs text-slate-500 mt-2">Os valores são o resultado de cada rodada. ⚔️ indica rodada com guerra de preços.</p></div>' +
+
+    '<div class="flex flex-wrap justify-end gap-3 no-print">' + (antecipado ? '<button onclick="retomarJogo()" class="rounded-xl border-2 border-tinta text-tinta font-bold px-6 py-3 hover:bg-indigo-50">Retomar o jogo na rodada ' + (nJ + 1) + '</button>' : '') +
+      '<button onclick="window.print()" class="rounded-xl border-2 border-tinta text-tinta font-bold px-6 py-3 hover:bg-indigo-50">Imprimir / salvar em PDF</button>' +
+      '<button onclick="reiniciar()" class="rounded-xl bg-tinta text-white font-bold px-6 py-3 hover:opacity-90">Novo jogo</button></div>' +
+  '</section>';
+}
+
+/* ---------- 7. AÇÕES ---------- */
+function marcado(nome) { const el = document.querySelector('input[name="' + nome + '"]:checked'); return el ? el.value : null; }
+function lerConfig() {
+  const num = (id, pad, min) => { const v = parseFloat($(id).value); return isFinite(v) && v >= min ? v : pad; };
+  Object.assign(S.cfg, { modo: marcado('modo') || 'simultaneo', demanda: num('cfg-demanda', PADRAO.demanda, 1), fixo: num('cfg-fixo', PADRAO.fixo, 0),
+    bonus: num('cfg-bonus', PADRAO.bonus, 0), capital: num('cfg-capital', PADRAO.capital, 0), pivo: num('cfg-pivo', PADRAO.pivo, 0) });
+  S.empresas.forEach((e, i) => { e.nome = $('eq' + i).value.trim(); });
+}
+function definirN(n) {
+  lerConfig(); S.cfg.n = n;
+  const nomes = S.empresas.map(e => e.nome);
+  S.empresas = Array.from({ length: n }, (_, i) => novaEmpresa(i, S.cfg, nomes[i]));
+  S.decisoes = Array(n).fill(null); salvar(); render();
+}
+function iniciarJogo() {
+  lerConfig();
+  S.empresas.forEach(e => { e.caixa = S.cfg.capital; e.share = 1 / S.cfg.n; });
+  ir('painel');
+}
+function iniciarRodada() { S.turno = 0; S.decisoes = Array(S.cfg.n).fill(null); ir(S.cfg.modo === 'simultaneo' ? 'coleta' : 'passa'); }
+function limitarInov(el) {
+  const ids = ['vacas', 'estrelas', 'interr'];
+  const outros = ids.filter(id => id !== el.id).reduce((s, id) => s + parseFloat($(id).value), 0);
+  if (parseFloat(el.value) + outros > MAX_PD) el.value = Math.max(0, MAX_PD - outros);
+}
+function atualizarResumo() {
+  if (!$('mkt')) return;
+  const mkt = parseFloat($('mkt').value), v = parseFloat($('vacas').value), e = parseFloat($('estrelas').value), q = parseFloat($('interr').value);
+  $('mkt-v').textContent = rs(mkt); $('vacas-v').textContent = rs(v); $('estrelas-v').textContent = rs(e); $('interr-v').textContent = rs(q);
+  $('pd-total').textContent = rs(v + e + q);
+  $('resumo').textContent = rs((modoEquipe() ? 0 : S.cfg.fixo) + mkt + v + e + q);
+  $('erro').textContent = '';
+}
+function lerDecisao() {
+  const d = { tows: marcado('tows'), porter: marcado('porter'), preco: marcado('preco'), smart: marcado('smart'),
+    mkt: parseFloat($('mkt').value), vacas: parseFloat($('vacas').value), estrelas: parseFloat($('estrelas').value), interr: parseFloat($('interr').value) };
+  const falta = [];
+  if (!d.tows) falta.push('postura'); if (!d.porter) falta.push('proposta de valor'); if (!d.preco) falta.push('preço'); if (!d.smart) falta.push('meta SMART');
+  if (falta.length) { $('erro').textContent = 'Falta escolher: ' + falta.join(', ') + '.'; return null; }
+  return d;
+}
+function confirmarTurno() {
+  const d = lerDecisao(); if (!d) return;
+  S.decisoes[S.turno] = d;
+  S.turno++;
+  ir(S.turno < S.cfg.n ? 'passa' : 'apurar');
+}
+function apurar() { apurarRodada(); ir('resultado'); }
+function proximaRodada() {
+  if (S.rodada >= RODADAS) return ir('final');
+  S.rodada++; S.turno = 0; S.decisoes = Array(S.cfg.n).fill(null); ir('painel');
+}
+function encerrarAgora() {
+  const n = S.historico.length;
+  if (!window.confirm('Encerrar o jogo agora? O placar final vai considerar ' + n + (n === 1 ? ' rodada apurada' : ' rodadas apuradas') + '. Será possível retomar o jogo depois.')) return;
+  ir('final');
+}
+function retomarJogo() { S.rodada = S.historico.length + 1; S.turno = 0; S.decisoes = Array(S.cfg.n).fill(null); ir('painel'); }
+function reiniciar() {
+  if (modoEquipe()) {
+    if (T && T.emp !== null && !window.confirm('Trocar de empresa? As decisões salvas neste dispositivo serão apagadas.')) return;
+    T = novoT(); salvarT(); render(); window.scrollTo(0, 0); return;
+  }
+  if (S.tela !== 'setup' && !(S.tela === 'final' && S.historico.length >= RODADAS) && !window.confirm('Reiniciar o jogo? Todo o progresso atual será perdido.')) return;
+  S = novoEstado(S.cfg, S.empresas.map(e => e.nome)); salvar(); render(); window.scrollTo(0, 0);
+}
+function toggleRegras(abrir) {
+  if (abrir) $('regras-corpo').innerHTML = textoRegras();
+  $('regras').classList.toggle('hidden', !abrir);
+}
+function textoRegras() {
+  const c = S.cfg;
+  return [
+    ['Objetivo', 'Maior Valor da Empresa ao final de ' + RODADAS + ' rodadas. Valor da Empresa = caixa + ativos intangíveis (R$ ' + INTANG + ' mil por ponto dos índices de Marca e Inovação). O professor pode encerrar o jogo antes; nesse caso, vale o valor na última rodada apurada.'],
+    ['Empresas', 'De 4 a 6 startups idênticas: mesmo capital inicial (' + rs(c.capital) + '), mesma participação de mercado e mesmos índices. O resultado depende apenas das decisões.'],
+    ['Dinâmica', 'Em cada rodada um cenário é revelado e todas as empresas decidem em segredo. No modo Simultâneo, cada equipe decide no próprio dispositivo e entrega ao professor um código de decisão. No modo Revezamento, as equipes decidem em sequência no mesmo aparelho. O mercado só é apurado depois que todas as decisões forem registradas.'],
+    ['Mercado', 'Demanda base de ' + rs(c.demanda) + ' por empresa a cada rodada, dividida conforme a participação de mercado. A atratividade de cada empresa é: Preço 50% + Marca 30% + Inovação 20%. Pequenas diferenças de atratividade geram grandes diferenças de participação.'],
+    ['Proposta de valor e margens', 'Baixo Custo: margem de 10% e custo fixo R$ 3 mil menor. Premium: 9% (preço baixo), 10% a 12% (médio) e 13% a 18% (alto), conforme os índices de Marca e Inovação. Nicho: 9%, 14% e 17%, com investimentos rendendo +30% e mercado alcançável 5% menor. Teto geral de 18%.'],
+    ['Pivô', 'Mudar de proposta de valor em relação à rodada anterior custa ' + rs(c.pivo) + '.'],
+    ['Custos e caixa', 'Custo fixo de ' + rs(c.fixo) + ' por rodada, mais marketing (até R$ 10 mil) e inovação (até R$ 15 mil). Se o caixa ficar negativo, a empresa paga juros de 8% por rodada sobre o saldo devedor.'],
+    ['Marca e inovação', 'São estoques com retornos decrescentes. A marca perde 50% por rodada sem reposição, e a inovação perde 40%.'],
+    ['Tipos de inovação', 'Incremental: reduz o custo fixo (R$ 0,25 mil por R$ 1 mil, até R$ 3 mil). De produto: até +1,5 p.p. de margem quando o marketing é de R$ 4 mil ou mais. Radical: 35% de chance de sucesso; se der certo, multiplica a inovação e gera ganho permanente de margem (até +2 p.p.).'],
+    ['Postura', 'Arrojada: amplia em 50% os cenários favoráveis e dá +15% de eficácia ao marketing. Cautelosa: reduz à metade o impacto dos cenários negativos.'],
+    ['Guerra de preços', 'Se duas ou mais empresas escolherem Baixo Custo com preço baixo na mesma rodada, o lucro bruto de cada uma cai 40%.'],
+    ['Meta SMART', 'Cada equipe escolhe uma meta por rodada. Se for atingida, recebe bônus de ' + rs(c.bonus) + '.'],
+    ['Cenários', EVENTOS.map(e => e.icone + ' ' + e.nome + ': ' + e.efeito).join(' ')]
+  ].map(r => '<p><strong class="text-tinta">' + r[0] + '.</strong> ' + r[1] + '</p>').join('') +
+    (modoEquipe() ? '<p class="text-slate-500">Neste dispositivo aparecem os valores padrão do jogo. Se o professor alterou algum ajuste, vale o que está no painel projetado.</p>' : '');
+}
+
+/* ---------- 8. INICIALIZAÇÃO ---------- */
+function iniciar() {
+  S = carregar();
+  if (!S || !S.empresas || !S.cfg || !S.cfg.n) S = novoEstado(PADRAO);
+  if (S.tela === 'decisao') S.tela = 'passa';     // recarregou no meio de um turno: volta à troca de equipe
+  render();
+}
+if (typeof document !== 'undefined') { iniciar(); window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); }); }
+</script>
+</body>
+</html>
